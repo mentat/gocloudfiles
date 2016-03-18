@@ -1,4 +1,4 @@
-package sisyphus
+package gocloudfiles
 
 import (
 	"bytes"

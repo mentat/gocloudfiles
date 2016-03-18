@@ -1,1 +1,1 @@
-package sisyphus
+package gocloudfiles
