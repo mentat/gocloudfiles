@@ -166,36 +166,37 @@ func (cf *CloudFiles) Authorize() error {
 	return nil
 }
 
-func (cf CloudFiles) GetFileSize(dc, bucket, filename string) (int64, error) {
+func (cf CloudFiles) GetFileSize(dc, bucket, filename string) (int64, string, error) {
 	/*
 		Get the size of a remote cloudfiles file.
+		Returns a 3-tuple of length, etag, error
 	*/
 
 	endpoint := cf.dcs[dc]
 	if endpoint == "" {
-		return 0, fmt.Errorf("Could not find region %s in service catalog.", dc)
+		return 0, "", fmt.Errorf("Could not find region %s in service catalog.", dc)
 	}
 
 	client := &http.Client{}
 
 	url := fmt.Sprintf("%s/%s/%s", endpoint, bucket, filename)
 
-	req, err := http.NewRequest("GET", url, nil)
-	req.Header.Add("Range", "0")
+	req, err := http.NewRequest("HEAD", url, nil)
+	//req.Header.Add("Range", "0")
 	req.Header.Add("X-Auth-Token", cf.authToken)
 	resp, err := client.Do(req)
 
 	if resp.StatusCode != 200 {
-		return 0, fmt.Errorf("Could not fetch cloud file, status: %d", resp.StatusCode)
+		return 0, "", fmt.Errorf("Could not fetch cloud file, status: %d", resp.StatusCode)
 	}
 
 	contentLength, err := strconv.ParseInt(resp.Header["Content-Length"][0], 10, 64)
 
 	if err != nil {
-		return 0, fmt.Errorf("Could not determine content length.")
+		return 0, "", fmt.Errorf("Could not determine content length.")
 	}
 
-	return contentLength, nil
+	return contentLength, resp.Header["Etag"][0], nil
 }
 
 func (cf CloudFiles) GetChunk(dc, bucket, remoteFilename string, out io.Writer,
@@ -338,7 +339,7 @@ func (cf CloudFiles) CopyFile(sourceDC, sourceBucket, sourceFile, destDC, destBu
 	// 256MB chunks, tune as needed
 	chunkSize := int64(256 * 1024 * 1024)
 
-	size, err := cf.GetFileSize(sourceDC, sourceBucket, sourceFile)
+	size, _, err := cf.GetFileSize(sourceDC, sourceBucket, sourceFile)
 	if err != nil {
 		return err
 	}
@@ -391,21 +392,33 @@ loop:
 			bytesRead, etag, err := cf.GetChunk(sourceDC, sourceBucket, sourceFile,
 				tmpFile, chunkIndex*chunkSize, size)
 
-			tmpFile.Sync()
-			tmpFile.Seek(0, 0)
-
 			if err != nil {
 				ec <- err
 				tmpFile.Close()
 				return
 			}
 
-			etagUp, err := cf.PutFile(destDC, destBucket,
-				fmt.Sprintf("%s-%d", destFile, chunkIndex), tmpFile)
+			tmpFile.Sync()
+			tmpFile.Seek(0, 0)
 
-			if err != nil {
-				ec <- err
-				return
+			// The destination file name of the "part".
+			destFileName := fmt.Sprintf("%s-%d", destFile, chunkIndex)
+
+			// Smart recovery, first check the etag of the chunk/file to put
+			// and determine if we should actually upload.
+			_, etagUp, err := cf.GetFileSize(destDC, destBucket, destFileName)
+
+			if err == nil && etagUp == etag {
+				fmt.Println("Cache hit.")
+				// File already exists in remote DC, don't upload again.
+			} else {
+				etagUp, err = cf.PutFile(destDC, destBucket,
+					destFileName, tmpFile)
+
+				if err != nil {
+					ec <- err
+					return
+				}
 			}
 
 			if etagUp != etag {
@@ -414,7 +427,7 @@ loop:
 			}
 
 			manifest := manifestItem{
-				Path: fmt.Sprintf("%s/%s-%d", destBucket, destFile, chunkIndex),
+				Path: fmt.Sprintf("%s/%s", destBucket, destFileName),
 				ETag: etag,
 				Size: bytesRead,
 			}

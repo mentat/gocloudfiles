@@ -33,7 +33,7 @@ func TestGetFileLength(t *testing.T) {
 		t.Fatalf("Could not authorize: %s", err)
 	}
 
-	size, err := cf.GetFileSize("IAD", "testing", "ubuntu-14.04.4-desktop-amd64.iso")
+	size, _, err := cf.GetFileSize("IAD", "testing", "ubuntu-14.04.4-desktop-amd64.iso")
 	if err != nil {
 		t.Fatalf("Could not get file size: %s", err)
 	}
@@ -55,7 +55,7 @@ func TestGetFileChunk(t *testing.T) {
 		t.Fatalf("Could not authorize: %s", err)
 	}
 
-	size, err := cf.GetFileSize("IAD", "testing", "ubuntu-14.04.4-desktop-amd64.iso")
+	size, _, err := cf.GetFileSize("IAD", "testing", "ubuntu-14.04.4-desktop-amd64.iso")
 	if err != nil {
 		t.Fatalf("Could not get file size: %s", err)
 	}
