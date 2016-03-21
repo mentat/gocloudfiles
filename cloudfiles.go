@@ -409,7 +409,6 @@ loop:
 			_, etagUp, err := cf.GetFileSize(destDC, destBucket, destFileName)
 
 			if err == nil && etagUp == etag {
-				fmt.Println("Cache hit.")
 				// File already exists in remote DC, don't upload again.
 			} else {
 				etagUp, err = cf.PutFile(destDC, destBucket,
