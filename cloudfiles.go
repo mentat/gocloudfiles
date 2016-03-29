@@ -83,6 +83,18 @@ type CloudFiles struct {
 	dcs         map[string]string
 }
 
+func NewCloudFilesImpersonation(token string) *CloudFiles {
+	/*
+	   Create a new cloud files object using an inpersonation token.
+	*/
+	cf := &CloudFiles{
+		authToken: token,
+		dcs:      make(map[string]string),
+	}
+
+	return cf
+}
+
 func NewCloudFiles(userName, apiKey string) *CloudFiles {
 	/*
 	   Create a new cloud files object.
@@ -94,6 +106,76 @@ func NewCloudFiles(userName, apiKey string) *CloudFiles {
 	}
 
 	return cf
+}
+
+func (cf *CloudFiles) loadCatalog(resp *http.Response) error {
+	/*
+		Read the service catalog and store endpoints on object.
+	*/
+	if resp.StatusCode != 200 {
+
+		responseBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("Could not authenticate: %d", resp.StatusCode)
+		} else {
+			return fmt.Errorf("Could not authenticate: %s (%d)", responseBody, resp.StatusCode)
+		}
+	}
+
+	var respData accessWrapper
+	err := json.NewDecoder(resp.Body).Decode(&respData)
+
+	if err != nil {
+		return err
+	}
+
+	cf.authToken = respData.Access.Token.Id
+	cf.tenantId = respData.Access.Token.Tenant.Id
+
+	// Load all endpoints into memory.
+	catalog := respData.Access.Catalog
+	for i := range catalog {
+		if catalog[i].Name == "cloudFiles" {
+			endpoints := catalog[i].Endpoints
+			for inner := range endpoints {
+				cf.dcs[endpoints[inner].Region] = endpoints[inner].PublicURL
+			}
+			break
+		}
+	}
+
+	return nil
+}
+
+func (cf *CloudFiles) RefreshCatalog() error {
+	/*
+		Request an updated catalog using the token.
+	*/
+
+	if cf.authToken == "" {
+		return fmt.Errorf("Cannot refresh catalog: auth token is missing.")
+	}
+
+	client := &http.Client{}
+
+	url := "https://identity.api.rackspacecloud.com/v2.0/tokens/%s/endpoints"
+	url = fmt.Sprintf(url, cf.authToken)
+
+	req, err := http.NewRequest("GET", url, nil)
+
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	return cf.loadCatalog(resp)
 }
 
 func (cf *CloudFiles) Authorize() error {
@@ -131,39 +213,8 @@ func (cf *CloudFiles) Authorize() error {
 	}
 
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
 
-		responseBody, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("Could not authenticate: %d", resp.StatusCode)
-		} else {
-			return fmt.Errorf("Could not authenticate: %s (%d)", responseBody, resp.StatusCode)
-		}
-	}
-
-	var respData accessWrapper
-	err = json.NewDecoder(resp.Body).Decode(&respData)
-
-	if err != nil {
-		return err
-	}
-
-	cf.authToken = respData.Access.Token.Id
-	cf.tenantId = respData.Access.Token.Tenant.Id
-
-	// Load all endpoints into memory.
-	catalog := respData.Access.Catalog
-	for i := range catalog {
-		if catalog[i].Name == "cloudFiles" {
-			endpoints := catalog[i].Endpoints
-			for inner := range endpoints {
-				cf.dcs[endpoints[inner].Region] = endpoints[inner].PublicURL
-			}
-			break
-		}
-	}
-
-	return nil
+	return cf.loadCatalog(resp)
 }
 
 func (cf CloudFiles) GetFileSize(dc, bucket, filename string) (int64, string, error) {
