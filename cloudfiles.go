@@ -24,9 +24,10 @@ type raxKeyCreds struct {
 }
 
 type serviceEndpoints struct {
-	Region    string `json:"region"`
-	TenantId  string `json:"tenantId"`
-	PublicURL string `json:"publicURL"`
+	Region      string `json:"region"`
+	TenantId    string `json:"tenantId"`
+	PublicURL   string `json:"publicURL"`
+	InternalURL string `json:"internalURL"`
 }
 
 type serviceCatalog struct {
@@ -81,6 +82,8 @@ type CloudFiles struct {
 	authToken   string
 	apiKey      string
 	dcs         map[string]string
+	dcsInternal map[string]string
+	localDC     string
 }
 
 func NewCloudFilesImpersonation(token string) *CloudFiles {
@@ -88,8 +91,9 @@ func NewCloudFilesImpersonation(token string) *CloudFiles {
 	   Create a new cloud files object using an inpersonation token.
 	*/
 	cf := &CloudFiles{
-		authToken: token,
-		dcs:      make(map[string]string),
+		authToken:   token,
+		dcs:         make(map[string]string),
+		dcsInternal: make(map[string]string),
 	}
 
 	return cf
@@ -100,9 +104,10 @@ func NewCloudFiles(userName, apiKey string) *CloudFiles {
 	   Create a new cloud files object.
 	*/
 	cf := &CloudFiles{
-		userName: userName,
-		apiKey:   apiKey,
-		dcs:      make(map[string]string),
+		userName:    userName,
+		apiKey:      apiKey,
+		dcs:         make(map[string]string),
+		dcsInternal: make(map[string]string),
 	}
 
 	return cf
@@ -139,12 +144,17 @@ func (cf *CloudFiles) loadCatalog(resp *http.Response) error {
 			endpoints := catalog[i].Endpoints
 			for inner := range endpoints {
 				cf.dcs[endpoints[inner].Region] = endpoints[inner].PublicURL
+				cf.dcsInternal[endpoints[inner].Region] = endpoints[inner].InternalURL
 			}
 			break
 		}
 	}
 
 	return nil
+}
+
+func (cf *CloudFiles) SetLocalDC(dc string) {
+	cf.localDC = dc
 }
 
 func (cf *CloudFiles) RefreshCatalog() error {
@@ -222,8 +232,12 @@ func (cf CloudFiles) GetFileSize(dc, bucket, filename string) (int64, string, er
 		Get the size of a remote cloudfiles file.
 		Returns a 3-tuple of length, etag, error
 	*/
-
 	endpoint := cf.dcs[dc]
+
+	if dc == cf.localDC {
+		endpoint = cf.dcsInternal[dc]
+	}
+
 	if endpoint == "" {
 		return 0, "", fmt.Errorf("Could not find region %s in service catalog.", dc)
 	}
@@ -258,6 +272,10 @@ func (cf CloudFiles) GetChunk(dc, bucket, remoteFilename string, out io.Writer,
 	*/
 
 	endpoint := cf.dcs[dc]
+	if dc == cf.localDC {
+		endpoint = cf.dcsInternal[dc]
+	}
+
 	if endpoint == "" {
 		return 0, "", fmt.Errorf("Could not find region %s in service catalog.", dc)
 	}
@@ -316,6 +334,10 @@ func (cf CloudFiles) PutFile(dc, bucket, filename string, data io.Reader) (strin
 	   Returns a tuple of etag, error
 	*/
 	endpoint := cf.dcs[dc]
+	if dc == cf.localDC {
+		endpoint = cf.dcsInternal[dc]
+	}
+
 	if endpoint == "" {
 		return "", fmt.Errorf("Could not find region %s in service catalog.", dc)
 	}
@@ -344,6 +366,9 @@ func (cf CloudFiles) PutFile(dc, bucket, filename string, data io.Reader) (strin
 
 func (cf CloudFiles) putManifest(dc, bucket, filename string, manifestItems manifestList) error {
 	endpoint := cf.dcs[dc]
+	if dc == cf.localDC {
+		endpoint = cf.dcsInternal[dc]
+	}
 
 	if endpoint == "" {
 		return fmt.Errorf("Could not find region %s in service catalog.", dc)
